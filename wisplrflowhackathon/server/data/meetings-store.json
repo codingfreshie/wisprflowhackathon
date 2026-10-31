@@ -1,0 +1,194 @@
+{
+  "meetings": [
+    {
+      "title": "New Notetaker App Launch",
+      "date": "2026-10-31T16:07:35.182Z",
+      "source": "Wispr Flow Voice Ingestion",
+      "efficiencyScore": 79,
+      "decisions": [
+        {
+          "id": "dec-1793462859584-1",
+          "decision": "Capture follow-ups from New Notetaker App Launch",
+          "context": "No explicit decision verb found; logged alignment from spoken sync",
+          "category": "Strategy",
+          "impactedComponents": [
+            "Core Service"
+          ],
+          "status": "Active"
+        }
+      ],
+      "actionItems": [
+        {
+          "id": "task-1793462859584-1",
+          "title": "Document and circulate meeting execution roadmap to all attendees",
+          "owner": "Priya",
+          "deadline": "2026-11-07",
+          "priority": "Medium",
+          "status": "Synced",
+          "tracker": "Linear",
+          "externalId": "LIN-782",
+          "externalUrl": "https://linear.app/issue/LIN-782",
+          "syncedAt": "2026-10-31T16:07:59.559Z"
+        }
+      ],
+      "conflicts": [],
+      "id": "meet-1793462859589"
+    },
+    {
+      "title": "Priya Scheduling 8:10 AM",
+      "date": "2026-10-31T16:02:54.727Z",
+      "source": "Wispr Flow Voice Ingestion",
+      "efficiencyScore": 79,
+      "decisions": [
+        {
+          "id": "dec-1793462576222-1",
+          "decision": "Capture follow-ups from Priya Scheduling 8:10 AM",
+          "context": "No explicit decision verb found; logged alignment from spoken sync",
+          "category": "Strategy",
+          "impactedComponents": [
+            "Core Service"
+          ],
+          "status": "Active"
+        }
+      ],
+      "actionItems": [
+        {
+          "id": "task-1793462576222-1",
+          "title": "Document and circulate meeting execution roadmap to all attendees",
+          "owner": "Priya",
+          "deadline": "2026-11-07",
+          "priority": "Medium",
+          "status": "Synced",
+          "tracker": "Linear",
+          "externalId": "LIN-594",
+          "externalUrl": "https://linear.app/issue/LIN-594",
+          "syncedAt": "2026-10-31T16:03:39.420Z"
+        }
+      ],
+      "conflicts": [],
+      "id": "meet-1793462576237"
+    },
+    {
+      "id": "meet-001",
+      "title": "Q4 Product Launch & Scope Alignment",
+      "date": "2026-10-24T10:00:00.000Z",
+      "source": "Wispr Flow Voice Ingestion",
+      "efficiencyScore": 88,
+      "decisions": [
+        {
+          "id": "dec-001",
+          "decision": "Lock target Q4 launch date strictly for November 15, 2026",
+          "context": "Marketing campaigns and press embargoes are booked for mid-November.",
+          "category": "Timeline",
+          "impactedComponents": [
+            "Mobile App",
+            "Web Checkout",
+            "Marketing"
+          ],
+          "status": "Superseded",
+          "supersededBy": "New meeting proposes moving the launch/release to dec 1",
+          "supersededAt": "2026-10-31T15:14:15.931Z"
+        },
+        {
+          "id": "dec-002",
+          "decision": "Must include Apple Pay and Google Pay integration in v1 checkout",
+          "context": "User research showed 68% mobile shoppers abandon without one-click checkout.",
+          "category": "Feature Scope",
+          "impactedComponents": [
+            "Web Checkout",
+            "Payments Backend"
+          ],
+          "status": "Active"
+        },
+        {
+          "id": "dec-003",
+          "decision": "Mandatory zero-downtime database migration strategy before launch",
+          "context": "Lena confirmed customer SLA requires 99.99% availability during rollout.",
+          "category": "Infrastructure",
+          "impactedComponents": [
+            "PostgreSQL Cluster",
+            "Auth Service"
+          ],
+          "status": "Active"
+        }
+      ],
+      "actionItems": [
+        {
+          "id": "task-001",
+          "title": "Complete PCI-DSS compliance audit for payment gateway",
+          "owner": "Marcus",
+          "deadline": "2026-11-05",
+          "priority": "High",
+          "status": "Synced",
+          "tracker": "Linear",
+          "externalId": "LIN-102"
+        },
+        {
+          "id": "task-002",
+          "title": "Deliver final high-fidelity Figma components for checkout modal",
+          "owner": "Lena",
+          "deadline": "2026-11-08",
+          "priority": "High",
+          "status": "Synced",
+          "tracker": "Jira",
+          "externalId": "JIRA-409"
+        },
+        {
+          "id": "task-003",
+          "title": "Coordinate launch press release drafts with PR agency",
+          "owner": "Priya",
+          "deadline": "2026-11-10",
+          "priority": "Medium",
+          "status": "Synced",
+          "tracker": "Asana",
+          "externalId": "ASN-771"
+        }
+      ],
+      "stats": {
+        "actionToTalkRatio": "74%",
+        "fillerWordCount": 14,
+        "durationMinutes": 32
+      }
+    }
+  ],
+  "conflicts": [
+    {
+      "id": "conf-1793459655908-y4abq",
+      "topic": "Launch Date Contradiction",
+      "previousDecision": "Lock target Q4 launch date strictly for November 15, 2026",
+      "previousDecisionId": "dec-001",
+      "previousMeetingTitle": "Q4 Product Launch & Scope Alignment",
+      "contradiction": "New meeting proposes moving the launch/release to dec 1",
+      "severity": "High",
+      "reason": "Direct contradiction with locked timeline: \"Lock target Q4 launch date strictly for November 15, 2026\"",
+      "impactedOwners": [
+        "Marcus",
+        "Lena",
+        "Priya"
+      ],
+      "status": "Resolved",
+      "detectedAt": "2026-10-31T15:14:15.914Z",
+      "resolutionStrategy": "overwrite",
+      "resolutionNotes": "Approved by team lead",
+      "resolvedAt": "2026-10-31T15:14:15.931Z"
+    },
+    {
+      "id": "conf-sample-1",
+      "meetingId": "meet-001",
+      "detectedAt": "2026-10-24T10:35:00.000Z",
+      "topic": "Launch Date Timeline",
+      "previousDecision": "Lock target Q4 launch date strictly for November 15, 2026 (from Sprint Kickoff)",
+      "contradiction": "Tentative discussion about delaying to December 5th",
+      "severity": "High",
+      "status": "Resolved",
+      "resolution": "Reaffirmed Nov 15th deadline after Priya confirmed sponsor contract clauses"
+    }
+  ],
+  "syncedStats": {
+    "totalPushed": 9,
+    "linear": 7,
+    "jira": 1,
+    "asana": 1,
+    "notion": 0
+  }
+}

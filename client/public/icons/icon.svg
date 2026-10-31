@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#9333ea" />
+      <stop offset="100%" stop-color="#3b82f6" />
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="url(#grad)" />
+  <!-- Waveform / Microphone / Sync icon -->
+  <path d="M64 28 C56 28 50 34 50 42 L50 64 C50 72 56 78 64 78 C72 78 78 72 78 64 L78 42 C78 34 72 28 64 28 Z" fill="#ffffff" />
+  <path d="M40 58 C40 72 50 82 64 82 C78 82 88 72 88 58" stroke="#ffffff" stroke-width="6" stroke-linecap="round" fill="none" />
+  <line x1="64" y1="82" x2="64" y2="98" stroke="#ffffff" stroke-width="6" stroke-linecap="round" />
+  <line x1="48" y1="98" x2="80" y2="98" stroke="#ffffff" stroke-width="6" stroke-linecap="round" />
+  <!-- Sync Arrows at bottom -->
+  <circle cx="100" cy="96" r="16" fill="#10b981" />
+  <path d="M96 96 L104 96 M101 92 L105 96 L101 100" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+</svg>

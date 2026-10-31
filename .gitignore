@@ -1,0 +1,26 @@
+# Dependencies (reinstalled with npm install)
+node_modules/
+**/node_modules/
+
+# Secrets - NEVER commit API keys
+.env
+.env.*
+!.env.example
+server/.env
+
+# Runtime data (rebuilt from the built-in seed on every fresh start)
+server/data/*.json
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# NOTE: client/dist is intentionally NOT ignored.
+# It is the pre-built dashboard that the server serves, so the
+# deployed site works even without a build step on the host.
