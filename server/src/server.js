@@ -4,9 +4,10 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const db = require('./db');
-const { extractMeetingIntelligence } = require('./llmService');
+const { extractMeetingIntelligence, resolveKeys } = require('./llmService');
 const wisprDesktopSync = require('./wisprDesktopSync');
 const linearService = require('./linearService');
+const reports = require('./reports');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -30,8 +31,9 @@ if (fs.existsSync(clientDistPath)) {
 
 // Health Check & System Status
 app.get('/api/health', (req, res) => {
-  const geminiConfigured = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'YOUR_GEMINI_API_KEY');
-  const openAiConfigured = Boolean(process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== 'YOUR_OPENAI_API_KEY');
+  const keys = resolveKeys();
+  const geminiConfigured = Boolean(keys.geminiKey && keys.geminiKey !== 'YOUR_GEMINI_API_KEY');
+  const openAiConfigured = Boolean(keys.openAiKey && keys.openAiKey !== 'YOUR_OPENAI_API_KEY');
   
   res.json({
     status: 'ok',
@@ -58,28 +60,31 @@ app.post('/api/extract', async (req, res) => {
     }
 
     console.log(`[POST /api/extract] Processing meeting: "${meetingTitle}" (${transcript.length} characters)`);
-    const intelligence = await extractMeetingIntelligence(transcript, meetingTitle);
+
+    // If this title was extracted before, we REPLACE that meeting instead of letting it contradict itself
+    const existingId = db.findMeetingIdByTitle(meetingTitle);
+    const intelligence = await extractMeetingIntelligence(transcript, meetingTitle, { excludeMeetingId: existingId });
+
+    // Decisions that contradict locked memory are held as "Pending Review" until the conflict is resolved.
+    const conflictList = intelligence.conflicts || [];
+    const pendingIds = new Set(conflictList.flatMap(c => c.newDecisionIds || []));
+    const decisions = (intelligence.decisions || []).map(d =>
+      pendingIds.has(d.id) ? { ...d, status: 'Pending Review' } : d
+    );
 
     const saved = db.saveMeeting({
+      id: existingId,
       title: meetingTitle,
       date,
       source: 'Wispr Flow Voice Ingestion',
       efficiencyScore: intelligence.efficiency?.score,
-      decisions: intelligence.decisions,
+      efficiency: intelligence.efficiency,
+      decisions,
       actionItems: intelligence.actionItems,
-      conflicts: intelligence.conflicts || []
+      conflicts: conflictList
     });
 
-    const persistedConflicts = [];
-    if (intelligence.conflicts && Array.isArray(intelligence.conflicts)) {
-      intelligence.conflicts.forEach(c => {
-        persistedConflicts.push(db.addConflict({
-          ...c,
-          meetingId: saved.id,
-          meetingTitle: saved.title
-        }));
-      });
-    }
+    const persistedConflicts = db.replaceMeetingConflicts(saved.id, saved.title, conflictList);
 
     res.json({
       success: true,
@@ -88,7 +93,8 @@ app.post('/api/extract', async (req, res) => {
       meetingId: saved.id,
       savedToMemory: true,
       ...intelligence,
-      conflicts: persistedConflicts.length ? persistedConflicts : intelligence.conflicts
+      decisions,
+      conflicts: persistedConflicts
     });
   } catch (error) {
     console.error('[POST /api/extract] Error:', error);
@@ -119,9 +125,21 @@ app.post('/api/meetings/save', (req, res) => {
       return res.status(400).json({ error: "Meeting title is required" });
     }
 
+    // Never let a stale client copy overwrite decision statuses decided by conflict resolution
+    const existing = meetingData.id ? db.getMeeting(meetingData.id) : null;
+    if (existing) {
+      const serverById = new Map((existing.decisions || []).map(d => [d.id, d]));
+      meetingData.decisions = (meetingData.decisions || []).map(d =>
+        serverById.has(d.id) ? { ...d, status: serverById.get(d.id).status } : d
+      );
+    }
+
+    if (existing && !meetingData.efficiency && existing.efficiency) meetingData.efficiency = existing.efficiency;
+    if (existing && !meetingData.stats && existing.stats) meetingData.stats = existing.stats;
+
     const saved = db.saveMeeting(meetingData);
 
-    // Save any detected conflicts to the conflict store
+    // Persist any detected conflicts (idempotent by conflict id)
     if (meetingData.conflicts && Array.isArray(meetingData.conflicts)) {
       meetingData.conflicts.forEach(c => {
         db.addConflict({
@@ -136,6 +154,19 @@ app.post('/api/meetings/save', (req, res) => {
   } catch (error) {
     res.status(500).json({ error: "Failed to save meeting", details: error.message });
   }
+});
+
+// Persist inline edits (title / owner / deadline / priority) made in Review & Push
+app.put('/api/meetings/:id/tasks', (req, res) => {
+  const { tasks } = req.body;
+  if (!Array.isArray(tasks)) {
+    return res.status(400).json({ error: "tasks array is required" });
+  }
+  const meeting = db.updateMeetingTasks(req.params.id, tasks);
+  if (!meeting) {
+    return res.status(404).json({ error: "Meeting not found" });
+  }
+  res.json({ success: true, meeting });
 });
 
 app.delete('/api/meetings/:id', (req, res) => {
@@ -155,7 +186,8 @@ app.get('/api/conflicts', (req, res) => {
 
 app.post('/api/conflicts/resolve', (req, res) => {
   const { conflictId, strategy, notes } = req.body;
-  if (!conflictId || !strategy) {
+  const allowed = ['overwrite', 'keep_original', 'manual_flag'];
+  if (!conflictId || !strategy || !allowed.includes(strategy)) {
     return res.status(400).json({ error: "conflictId and strategy ('overwrite', 'keep_original', 'manual_flag') are required" });
   }
 
@@ -164,7 +196,8 @@ app.post('/api/conflicts/resolve', (req, res) => {
     return res.status(404).json({ error: "Conflict not found" });
   }
 
-  res.json({ success: true, conflict: resolved });
+  // Return the updated meeting so the UI can refresh decision statuses immediately
+  res.json({ success: true, conflict: resolved, meeting: db.getMeeting(resolved.meetingId) || null });
 });
 
 // Review & Push to Task Trackers (Linear live API, plus simulated Jira/Asana/Notion)
@@ -175,9 +208,10 @@ app.post('/api/push-tasks', async (req, res) => {
       return res.status(400).json({ error: "No tasks provided to push" });
     }
 
-    const result = await linearService.pushTasks({ tasks, tracker, meetingTitle });
+    const alreadyPushed = db.getSyncedStats()[String(tracker).toLowerCase()] || 0;
+    const result = await linearService.pushTasks({ tasks, tracker, meetingTitle, alreadyPushed });
     const stats = db.updateSyncedStats(tracker, result.pushedTasks.length);
-    db.markTasksSynced(result.pushedTasks, meetingTitle);
+    db.markTasksSynced(result.pushedTasks);
 
     const liveNote = result.live
       ? `Created ${result.pushedTasks.length} live Linear issues`
@@ -197,80 +231,99 @@ app.post('/api/push-tasks', async (req, res) => {
 });
 
 // Automated 24h Reminder Preview Generator (Slack / Email)
+const escapeHtml = (v) => String(v ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+
+function deadlineToDate(deadline) {
+  // Deadlines are YYYY-MM-DD; reminders and "due" are anchored to 09:00 local time on that day
+  const m = String(deadline || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return null;
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 9, 0, 0);
+}
+
 app.post('/api/reminders/generate', (req, res) => {
   const { tasks } = req.body;
-  const taskList = tasks || db.getAllTasks();
+  const taskList = Array.isArray(tasks) && tasks.length > 0 ? tasks : db.getAllTasks();
+  const now = new Date();
+  const DAY = 24 * 60 * 60 * 1000;
 
-  const simulatedReminders = taskList.map(task => {
-    const ownerName = task.owner || "Team Member";
-    const deadline = task.deadline || "Tomorrow";
-    const trackerId = task.externalId || "T-PENDING";
+  const reminders = taskList
+    .filter(task => task && task.title)
+    .map(task => {
+      const ownerName = task.owner || "Team Member";
+      const deadline = task.deadline || "TBD";
+      const due = deadlineToDate(task.deadline);
+      const sendAt = due ? new Date(due.getTime() - DAY) : null;
+      const msUntilDue = due ? due.getTime() - now.getTime() : null;
+      const daysUntil = due ? Math.ceil(msUntilDue / DAY) : null;
 
-    const slackText = `*Automated 24h Reminder from Meeting Sync Agent*\nHey @${ownerName.toLowerCase().replace(/\s+/g, '')}! Friendly heads-up: your action item *"${task.title}"* [${trackerId}] is scheduled for deadline *${deadline}*.\n_Need blocker escalation? Reply to this thread or click to update status._`;
+      let status = 'Scheduled';
+      if (!due) status = 'No deadline';
+      else if (msUntilDue < 0) status = 'Overdue';
+      else if (sendAt <= now) status = 'Due within 24h';
 
-    const emailHtml = `
-      <div style="font-family: sans-serif; padding: 16px; border: 1px solid #e2e8f0; border-radius: 8px;">
-        <h3 style="color: #0f172a; margin-top: 0;">24-Hour Task Reminder: ${task.title}</h3>
-        <p>Hi ${ownerName},</p>
+      const trackerName = task.tracker || 'Linear';
+      const trackerId = task.externalId || 'not pushed yet';
+      const handle = ownerName.toLowerCase().replace(/[^a-z0-9]+/g, '');
+      const safe = { title: escapeHtml(task.title), owner: escapeHtml(ownerName), deadline: escapeHtml(deadline), trackerId: escapeHtml(trackerId), priority: escapeHtml(task.priority || 'Medium'), tracker: escapeHtml(trackerName) };
+
+      const slackText = `*Automated 24h Reminder from Meeting Sync Agent*\nHey @${handle}! Friendly heads-up: your action item *"${task.title}"* [${trackerId}] is due *${deadline}*.\n_Need blocker escalation? Reply to this thread or click to update status._`;
+
+      const emailHtml = `
+      <div style="font-family: sans-serif; padding: 16px; border: 1px solid #e2e8f0; border-radius: 8px; background:#ffffff; color:#0f172a;">
+        <h3 style="color: #0f172a; margin-top: 0;">24-Hour Task Reminder: ${safe.title}</h3>
+        <p>Hi ${safe.owner},</p>
         <p>This is an automated sync reminder from <strong>Meeting Sync Agent</strong> for your assigned deliverable:</p>
         <ul>
-          <li><strong>Task:</strong> ${task.title}</li>
-          <li><strong>Deadline:</strong> ${deadline}</li>
-          <li><strong>Tracker ID:</strong> ${trackerId}</li>
-          <li><strong>Priority:</strong> ${task.priority || 'Medium'}</li>
+          <li><strong>Task:</strong> ${safe.title}</li>
+          <li><strong>Deadline:</strong> ${safe.deadline}</li>
+          <li><strong>Tracker ID:</strong> ${safe.trackerId}</li>
+          <li><strong>Priority:</strong> ${safe.priority}</li>
         </ul>
-        <p><a href="#" style="background: #2563eb; color: #ffffff; padding: 8px 16px; text-decoration: none; border-radius: 4px; display: inline-block;">Update Progress in ${task.tracker || 'Tracker'}</a></p>
-      </div>
-    `;
+        <p><span style="background: #2563eb; color: #ffffff; padding: 8px 16px; border-radius: 4px; display: inline-block;">Update Progress in ${safe.tracker}</span></p>
+      </div>`;
 
-    return {
-      taskId: task.id,
-      owner: ownerName,
-      title: task.title,
-      deadline,
-      slackText,
-      emailHtml,
-      sendWindow: "24 hours before deadline"
-    };
-  });
+      return {
+        taskId: task.id,
+        owner: ownerName,
+        title: task.title,
+        deadline,
+        priority: task.priority || 'Medium',
+        tracker: trackerName,
+        externalId: task.externalId || null,
+        externalUrl: task.externalUrl || null,
+        channel: '#proj-launch',
+        slackText,
+        emailHtml,
+        sendWindow: "24 hours before deadline",
+        sendAt: sendAt ? sendAt.toISOString() : null,
+        daysUntil,
+        status
+      };
+    })
+    .sort((a, b) => String(a.deadline).localeCompare(String(b.deadline)));
 
   res.json({
     success: true,
-    count: simulatedReminders.length,
-    reminders: simulatedReminders
+    count: reminders.length,
+    dueSoon: reminders.filter(r => r.status === 'Due within 24h').length,
+    overdue: reminders.filter(r => r.status === 'Overdue').length,
+    reminders
   });
 });
 
-// Weekly Digest: Group action items by owner across all stored meetings
+// Weekly Digest: group action items by owner across all stored meetings (+ needs-attention list)
 app.get('/api/weekly-digest', (req, res) => {
-  const allTasks = db.getAllTasks();
-  const byOwner = {};
+  res.json(reports.buildDigest());
+});
 
-  allTasks.forEach(task => {
-    const owner = task.owner || "Unassigned";
-    if (!byOwner[owner]) {
-      byOwner[owner] = {
-        owner,
-        totalTasks: 0,
-        pending: 0,
-        synced: 0,
-        highPriority: 0,
-        tasks: []
-      };
-    }
-    byOwner[owner].totalTasks++;
-    if (task.status === 'Synced') byOwner[owner].synced++;
-    else byOwner[owner].pending++;
-    if (task.priority === 'High') byOwner[owner].highPriority++;
-    byOwner[owner].tasks.push(task);
-  });
+// Cross-meeting efficiency scoreboard
+app.get('/api/efficiency-report', (req, res) => {
+  res.json(reports.buildEfficiencyReport());
+});
 
-  res.json({
-    digestDateRange: "Current Sprint / Week",
-    totalActionItems: allTasks.length,
-    owners: Object.values(byOwner),
-    activeDecisionsCount: db.getAllDecisions().filter(d => d.status === 'Active').length
-  });
+// One-click weekly report (digest + efficiency + conflict log) as Markdown
+app.get('/api/weekly-report', (req, res) => {
+  res.json({ success: true, ...reports.buildWeeklyMarkdown() });
 });
 
 // Wispr Notetaker Endpoints: Fetch latest notetaker output or receive inbound webhook
@@ -327,7 +380,38 @@ app.post('/api/wispr/import', (req, res) => {
 });
 
 // Direct Real-Time Desktop Sync Endpoints (reads directly from C:\Users\...\AppData\Roaming\Wispr Flow\flow.sqlite)
+// ---------------------------------------------------------------------------
+// Hosted-mode bridge: a hosted server cannot read the Wispr database on YOUR laptop.
+// Instead, scripts/wispr-bridge.cjs (run on the laptop) pushes a snapshot here, and
+// the desktop-* endpoints below fall back to it when no local flow.sqlite exists.
+// Disabled unless WISPR_BRIDGE_TOKEN is set on the server.
+// ---------------------------------------------------------------------------
+let bridgeSnapshot = null;
+
+app.post('/api/wispr/bridge-push', (req, res) => {
+  const token = process.env.WISPR_BRIDGE_TOKEN;
+  if (!token) {
+    return res.status(503).json({ error: 'Bridge disabled. Set WISPR_BRIDGE_TOKEN on the server to enable it.' });
+  }
+  if (req.get('x-bridge-token') !== token) {
+    return res.status(401).json({ error: 'Invalid bridge token' });
+  }
+  const { latest, history, meetings } = req.body || {};
+  bridgeSnapshot = {
+    latest: latest && latest.connected ? latest : null,
+    history: Array.isArray(history) ? history.slice(0, 50) : [],
+    meetings: Array.isArray(meetings) ? meetings.slice(0, 50) : [],
+    receivedAt: new Date().toISOString()
+  };
+  res.json({ success: true, receivedAt: bridgeSnapshot.receivedAt, historyCount: bridgeSnapshot.history.length });
+});
+
+const hasLocalWispr = () => !!wisprDesktopSync.getWisprDbPath();
+
 app.get('/api/wispr/desktop-sync', (req, res) => {
+  if (!hasLocalWispr() && bridgeSnapshot && bridgeSnapshot.latest) {
+    return res.json({ success: true, ...bridgeSnapshot.latest, viaBridge: true, bridgeReceivedAt: bridgeSnapshot.receivedAt });
+  }
   const mode = req.query.mode || 'notetaker_only';
   const syncResult = wisprDesktopSync.getLatestDesktopSync(mode);
   res.json({
@@ -337,7 +421,9 @@ app.get('/api/wispr/desktop-sync', (req, res) => {
 });
 
 app.get('/api/wispr/desktop-meetings', (req, res) => {
-  const meetings = wisprDesktopSync.getDesktopMeetingsList();
+  const meetings = (!hasLocalWispr() && bridgeSnapshot)
+    ? bridgeSnapshot.meetings
+    : wisprDesktopSync.getDesktopMeetingsList();
   res.json({
     success: true,
     count: meetings.length,
@@ -347,7 +433,9 @@ app.get('/api/wispr/desktop-meetings', (req, res) => {
 
 app.get('/api/wispr/desktop-history', (req, res) => {
   const limit = parseInt(req.query.limit, 10) || 10;
-  const history = wisprDesktopSync.getDesktopHistory(limit);
+  const history = (!hasLocalWispr() && bridgeSnapshot)
+    ? bridgeSnapshot.history.slice(0, limit)
+    : wisprDesktopSync.getDesktopHistory(limit);
   res.json({
     success: true,
     count: history.length,
@@ -355,20 +443,24 @@ app.get('/api/wispr/desktop-history', (req, res) => {
   });
 });
 
-// Export Clean Markdown Summary
+// Export Clean Markdown Summary (single meeting)
 app.post('/api/export', (req, res) => {
   const { meeting, decisions, actionItems, conflicts, efficiency } = req.body;
+  const score = typeof efficiency?.score === 'number' ? `${efficiency.score}/100` : 'n/a';
 
   let markdown = `# Meeting Sync Execution Report: ${meeting?.title || 'Team Spoken Sync'}\n`;
   markdown += `**Date:** ${meeting?.date || new Date().toLocaleDateString()} | **Source:** Wispr Flow Voice Ingestion\n`;
-  markdown += `**Efficiency Score:** ${efficiency?.score || 85}/100 | **Action-to-Talk Ratio:** ${efficiency?.actionToTalkRatio || '76%'}\n\n`;
+  markdown += `**Efficiency Score:** ${score}${efficiency?.grade ? ` (${efficiency.grade})` : ''} | **Action-to-Talk Ratio:** ${efficiency?.actionToTalkRatio || 'n/a'} | **Fillers filtered:** ${efficiency?.fillerWordCount ?? 0}\n\n`;
 
-  markdown += `## 💡 Executive Efficiency Critique\n> ${efficiency?.critique || 'Solid alignment on action items and team ownership.'}\n\n`;
+  markdown += `## 💡 Executive Efficiency Critique\n> ${efficiency?.critique || 'No critique available for this meeting.'}\n\n`;
+  if (Array.isArray(efficiency?.breakdown) && efficiency.breakdown.length) {
+    markdown += `**Score breakdown:** ${efficiency.breakdown.map(b => `${b.label} (${b.points > 0 ? '+' : ''}${b.points})`).join(' · ')}\n\n`;
+  }
 
   markdown += `## 🎯 Key Decisions\n`;
   if (decisions && decisions.length > 0) {
     decisions.forEach((d, idx) => {
-      markdown += `${idx + 1}. **${d.decision}**\n`;
+      markdown += `${idx + 1}. **${d.decision}** — _${d.status || 'Active'}_\n`;
       markdown += `   - *Category:* ${d.category || 'General'} | *Impact:* ${(d.impactedComponents || []).join(', ') || 'Core Platform'}\n`;
       if (d.context) markdown += `   - *Context:* ${d.context}\n`;
     });
@@ -381,7 +473,7 @@ app.post('/api/export', (req, res) => {
   if (actionItems && actionItems.length > 0) {
     actionItems.forEach(t => {
       markdown += `- [${t.status === 'Synced' ? 'x' : ' '}] **${t.title}**\n`;
-      markdown += `  - **Owner:** @${t.owner} | **Deadline:** ${t.deadline} | **Priority:** ${t.priority || 'Medium'} | **Tracker:** ${t.tracker || 'Linear'}\n`;
+      markdown += `  - **Owner:** @${t.owner} | **Deadline:** ${t.deadline} | **Priority:** ${t.priority || 'Medium'} | **Tracker:** ${t.tracker || 'Linear'}${t.externalId ? ` (${t.externalId})` : ''}\n`;
     });
   } else {
     markdown += `*No action items logged.*\n`;
@@ -389,13 +481,17 @@ app.post('/api/export', (req, res) => {
   markdown += `\n`;
 
   if (conflicts && conflicts.length > 0) {
-    markdown += `## ⚠️ Cross-Meeting Conflicts Flagged\n`;
+    markdown += `## ⚠️ Cross-Meeting Conflicts\n`;
     conflicts.forEach(c => {
-      markdown += `### 🔴 Conflict: ${c.topic} (${c.severity} Severity)\n`;
+      const outcome = c.resolutionStrategy === 'overwrite' ? 'Memory overwritten with the new decision'
+        : c.resolutionStrategy === 'keep_original' ? 'Original decision retained'
+        : c.status === 'Flagged' ? 'Flagged for team review'
+        : c.status === 'Resolved' ? 'Resolved' : 'OPEN - needs a decision';
+      markdown += `### 🔴 ${c.topic} (${c.severity || 'High'} Severity) — ${outcome}\n`;
       markdown += `- **Past Stored Decision:** ${c.previousDecision} *(from ${c.previousMeetingTitle || 'Prior Meeting'})*\n`;
       markdown += `- **New Contradiction:** ${c.contradiction}\n`;
-      markdown += `- **Root Cause:** ${c.reason}\n`;
-      markdown += `- **Impacted Stakeholders:** ${(c.impactedOwners || []).join(', ')}\n\n`;
+      markdown += `- **Root Cause:** ${c.reason || 'n/a'}\n`;
+      markdown += `- **Impacted Stakeholders:** ${(c.impactedOwners || []).join(', ') || 'n/a'}\n\n`;
     });
   }
 
@@ -428,7 +524,8 @@ app.get('*', (req, res) => {
 app.listen(PORT, () => {
   console.log(`====================================================`);
   console.log(`🚀 Meeting Sync Agent Backend Proxy running on http://localhost:${PORT}`);
-  console.log(`🔒 Secure LLM Proxy: GEMINI_API_KEY=${process.env.GEMINI_API_KEY ? 'Configured' : 'Unset (Using Voice NLP Fallback)'}`);
+  const activeKeys = resolveKeys();
+  console.log(`🔒 Secure LLM Proxy: ${activeKeys.geminiKey ? 'Google Gemini key detected' : activeKeys.openAiKey ? 'OpenAI key detected' : 'no key (using Voice NLP fallback)'}`);
   console.log(`🎙️ Wispr Flow Voice Workflow: Ready`);
   console.log(`====================================================`);
 });
