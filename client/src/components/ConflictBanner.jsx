@@ -6,7 +6,7 @@ export default function ConflictBanner({ conflicts, onResolveConflict }) {
 
   if (!conflicts || conflicts.length === 0) return null;
 
-  const activeConflicts = conflicts.filter(c => c.status !== 'Resolved');
+  const activeConflicts = conflicts.filter(c => !c.status || c.status === 'Active');
   if (activeConflicts.length === 0) return null;
 
   const handleAction = async (conflictId, strategy) => {

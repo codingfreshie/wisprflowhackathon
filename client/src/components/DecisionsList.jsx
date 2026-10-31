@@ -30,6 +30,21 @@ export default function DecisionsList({ decisions }) {
     }
   };
 
+  const statusBadge = (status) => {
+    if (!status || status === 'Active') return null;
+    const styles = {
+      'Pending Review': 'bg-amber-500/15 text-amber-300 border-amber-500/40',
+      Flagged: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
+      Rejected: 'bg-slate-700/50 text-slate-300 border-slate-600',
+      Superseded: 'bg-red-500/15 text-red-300 border-red-500/40'
+    };
+    return (
+      <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${styles[status] || styles.Rejected}`}>
+        {status}
+      </span>
+    );
+  };
+
   return (
     <div className="rounded-2xl border border-slate-800 bg-slate-900/90 shadow-xl p-5">
       <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-800">
@@ -42,7 +57,7 @@ export default function DecisionsList({ decisions }) {
           </h3>
         </div>
         <span className="text-xs text-slate-400">
-          Auto-synchronized with Persistent Memory
+          Saved to Persistent Memory
         </span>
       </div>
 
@@ -70,9 +85,12 @@ export default function DecisionsList({ decisions }) {
               )}
             </div>
 
-            <p className="text-sm font-semibold text-slate-100 leading-snug">
-              {d.decision}
-            </p>
+            <div className="flex items-start justify-between gap-2">
+              <p className={`text-sm font-semibold leading-snug ${d.status === 'Rejected' ? 'text-slate-500 line-through' : 'text-slate-100'}`}>
+                {d.decision}
+              </p>
+              {statusBadge(d.status)}
+            </div>
 
             {d.context && (
               <p className="text-xs text-slate-400 mt-1.5 italic">

@@ -69,6 +69,8 @@ wisplrflowhackathon/
 
 ## 🚀 Quick Start Guide
 
+**Fastest:** run `start-demo.bat` (Windows) or `./start-demo.sh` and open http://localhost:5000. See `DEMO.md` for the click path and voiceover script.
+
 ### Step 1: Start the Secure Backend Proxy
 The backend securely manages LLM keys and maintains the cross-meeting persistent memory:
 

@@ -17,7 +17,7 @@ import {
   Laptop
 } from 'lucide-react';
 import { SAMPLE_TRANSCRIPTS } from '../data/sampleTranscripts';
-import { fetchDirectDesktopSync, fetchDesktopHistory } from '../services/api';
+import { fetchDirectDesktopSync, fetchDesktopHistory, fetchLatestWisprNotetaker } from '../services/api';
 
 export default function VoiceIngestionTab({
   transcript,
@@ -32,6 +32,9 @@ export default function VoiceIngestionTab({
   const [desktopNotice, setDesktopNotice] = useState(null);
   const [desktopHistoryList, setDesktopHistoryList] = useState([]);
   const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [syncError, setSyncError] = useState(null);
+  const [bridgeStatus, setBridgeStatus] = useState('unknown'); // 'unknown' | 'connected' | 'offline'
   const [lastSyncedId, setLastSyncedId] = useState(null);
   const [pastedNotice, setPastedNotice] = useState(false);
   const [isStreamingSimulation, setIsStreamingSimulation] = useState(false);
@@ -68,33 +71,57 @@ export default function VoiceIngestionTab({
     };
   }, [isAutoSyncEnabled, lastSyncedId, setTranscript, setMeetingTitle]);
 
-  // Sync directly from the Wispr Flow Desktop SQLite database
+  // Sync directly from the Wispr Flow Desktop SQLite database.
+  // If the desktop DB isn't available (different machine / Wispr not installed), fall back to the
+  // latest Wispr Notetaker session held by the backend so the demo never dead-ends.
   const handleDirectDesktopSync = async () => {
     setIsSyncingDesktop(true);
     setDesktopNotice(null);
+    setSyncError(null);
     try {
       const res = await fetchDirectDesktopSync();
       if (res && res.connected && res.transcript) {
+        setBridgeStatus('connected');
         setTranscript(res.transcript);
         setLastSyncedId(res.id);
         setMeetingTitle(res.title || "Wispr Desktop Meeting");
         setDesktopNotice({
           title: res.title,
           source: res.source,
-          numWords: res.numWords,
+          numWords: res.numWords || res.transcript.split(/\s+/).filter(Boolean).length,
           timestamp: res.timestamp,
           type: res.type
         });
-
-        // Also fetch history
         loadDesktopHistory();
-      } else if (res && !res.connected) {
-        alert("Wispr Flow desktop database was not found. Please ensure the Wispr Flow app is installed on your computer.");
+        return;
+      }
+
+      // Desktop DB reachable but empty, or not found -> try the Notetaker session
+      setBridgeStatus(res && res.connected ? 'connected' : 'offline');
+      const fallback = await fetchLatestWisprNotetaker();
+      const session = fallback?.session;
+      if (session?.rawTranscript) {
+        setTranscript(session.rawTranscript);
+        setMeetingTitle(session.title || 'Wispr Notetaker Session');
+        setDesktopNotice({
+          title: session.title,
+          source: session.source || 'Wispr Notetaker',
+          numWords: session.rawTranscript.split(/\s+/).filter(Boolean).length,
+          timestamp: session.date,
+          type: 'Wispr Notetaker Session',
+          fallback: true
+        });
+        setSyncError(
+          res && res.connected
+            ? 'Wispr desktop has no meeting recordings yet - loaded the latest Notetaker session instead.'
+            : 'Wispr desktop database not found on this machine - loaded the latest Notetaker session instead.'
+        );
       } else {
-        alert("Connected to Wispr Flow, but no recent dictations were found. Speak into Wispr Flow and try again!");
+        setSyncError('No Wispr meeting notes found yet. Record one with the Wispr Note-taker, or load a scenario below.');
       }
     } catch (err) {
-      alert("Failed to sync from desktop: " + err.message + "\nEnsure the backend server is running ('npm start' in server/).");
+      setBridgeStatus('offline');
+      setSyncError("Could not reach the backend: " + err.message);
     } finally {
       setIsSyncingDesktop(false);
     }
@@ -103,11 +130,12 @@ export default function VoiceIngestionTab({
   const loadDesktopHistory = async () => {
     try {
       const data = await fetchDesktopHistory(8);
-      if (data && data.history) {
-        setDesktopHistoryList(data.history);
-      }
+      setDesktopHistoryList(data && data.history ? data.history : []);
     } catch (e) {
       console.warn('Failed to load desktop history:', e);
+      setDesktopHistoryList([]);
+    } finally {
+      setHistoryLoaded(true);
     }
   };
 
@@ -218,9 +246,13 @@ export default function VoiceIngestionTab({
             <div>
               <div className="flex items-center space-x-2 flex-wrap">
                 <span className="font-bold text-emerald-200">Live Wispr Flow Desktop Connection</span>
-                <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center space-x-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
-                  <span>Direct SQLite Bridge Active</span>
+                <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full border flex items-center space-x-1 ${
+                  bridgeStatus === 'offline'
+                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                    : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                }`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${bridgeStatus === 'offline' ? 'bg-amber-400' : 'bg-emerald-400 animate-ping'}`}></span>
+                  <span>{bridgeStatus === 'offline' ? 'Desktop DB not found - Notetaker fallback ready' : 'Direct SQLite Bridge Ready'}</span>
                 </span>
               </div>
               <p className="text-slate-300 mt-1 leading-relaxed text-[11px] sm:text-xs">
@@ -239,7 +271,7 @@ export default function VoiceIngestionTab({
             <div>
               <div className="flex items-center space-x-2">
                 <p className="font-bold text-emerald-100">
-                  ⚡ Synced directly from your Wispr Desktop App:
+                  {desktopNotice.fallback ? '⚡ Loaded latest Wispr Notetaker session:' : '⚡ Synced directly from your Wispr Desktop App:'}
                 </p>
                 <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-900/80 text-emerald-300 border border-emerald-500/40 font-mono">
                   {desktopNotice.type}
@@ -260,6 +292,13 @@ export default function VoiceIngestionTab({
           >
             ✕
           </button>
+        </div>
+      )}
+
+      {syncError && (
+        <div className="p-3 rounded-xl border border-amber-500/40 bg-amber-950/40 text-amber-200 text-xs flex items-start justify-between gap-2">
+          <span>{syncError}</span>
+          <button onClick={() => setSyncError(null)} className="text-amber-300 hover:text-white font-bold">✕</button>
         </div>
       )}
 
@@ -298,6 +337,7 @@ export default function VoiceIngestionTab({
           <button
             type="button"
             onClick={() => {
+              setHistoryLoaded(false);
               loadDesktopHistory();
               setShowHistoryDrawer(!showHistoryDrawer);
             }}
@@ -367,7 +407,11 @@ export default function VoiceIngestionTab({
           </div>
 
           {desktopHistoryList.length === 0 ? (
-            <p className="text-xs text-slate-500 py-2">Loading recordings from flow.sqlite...</p>
+            <p className="text-xs text-slate-500 py-2">
+              {historyLoaded
+                ? 'No dictations found. Wispr Flow desktop data is only available on the machine running the backend where Wispr is installed.'
+                : 'Loading recordings from flow.sqlite...'}
+            </p>
           ) : (
             <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
               {desktopHistoryList.map((item) => (

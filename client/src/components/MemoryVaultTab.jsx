@@ -29,7 +29,7 @@ export default function MemoryVaultTab({ onMemoryChange }) {
     try {
       await resetMemoryDemo();
       await loadMemory();
-      if (onMemoryChange) onMemoryChange();
+      if (onMemoryChange) onMemoryChange({ reset: true });
     } catch (err) {
       alert("Reset failed: " + err.message);
     } finally {
@@ -42,7 +42,7 @@ export default function MemoryVaultTab({ onMemoryChange }) {
     try {
       await deleteMeetingFromMemory(id);
       await loadMemory();
-      if (onMemoryChange) onMemoryChange();
+      if (onMemoryChange) onMemoryChange({});
     } catch (err) {
       alert("Delete failed: " + err.message);
     }
@@ -132,7 +132,12 @@ export default function MemoryVaultTab({ onMemoryChange }) {
                     Historical Decisions:
                   </span>
                   {(m.decisions || []).map((d, dIdx) => {
-                    const isSuperseded = d.status === 'Superseded';
+                    const isSuperseded = d.status === 'Superseded' || d.status === 'Rejected';
+                    const statusStyle = (d.status === 'Pending Review' || d.status === 'Flagged')
+                      ? 'bg-amber-500/10 text-amber-300 border border-amber-500/30'
+                      : isSuperseded
+                      ? 'bg-red-500/10 text-red-400 border border-red-500/20'
+                      : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
                     return (
                       <div
                         key={d.id || dIdx}
@@ -146,11 +151,7 @@ export default function MemoryVaultTab({ onMemoryChange }) {
                           <span className="font-semibold text-[11px] text-purple-300">
                             [{d.category || 'Timeline'}]
                           </span>
-                          <span className={`text-[10px] px-1.5 py-0.2 rounded font-semibold ${
-                            isSuperseded
-                              ? 'bg-red-500/10 text-red-400 border border-red-500/20'
-                              : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                          }`}>
+                          <span className={`text-[10px] px-1.5 py-0.2 rounded font-semibold ${statusStyle}`}>
                             {d.status || 'Active'}
                           </span>
                         </div>
@@ -164,6 +165,23 @@ export default function MemoryVaultTab({ onMemoryChange }) {
                     );
                   })}
                 </div>
+
+                {/* Action items stored with this meeting */}
+                {(m.actionItems || []).length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-slate-800/80 space-y-1.5">
+                    <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
+                      Action Items ({m.actionItems.length}):
+                    </span>
+                    {m.actionItems.map((t, tIdx) => (
+                      <div key={t.id || tIdx} className="flex items-center justify-between gap-2 text-[11px] text-slate-300">
+                        <span className="truncate">{t.owner}: {t.title}</span>
+                        <span className={t.status === 'Synced' ? 'text-emerald-400 font-semibold shrink-0' : 'text-slate-500 shrink-0'}>
+                          {t.status === 'Synced' ? (t.externalId || 'Synced') : 'Pending'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
           </div>

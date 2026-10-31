@@ -1,10 +1,15 @@
 const LINEAR_API = 'https://api.linear.app/graphql';
 
-function simulateLinearPush(tasks, tracker = 'Linear') {
+// Sequential, collision-free simulated keys (LIN-103, LIN-104 ...). `alreadyPushed` is how many
+// items this tracker has received so far, so numbering continues across pushes and restarts.
+const KEY_BASE = { Linear: 101, Jira: 408, Asana: 770, Notion: 0 };
+
+function simulateLinearPush(tasks, tracker = 'Linear', alreadyPushed = 0) {
   const prefixes = { Linear: 'LIN', Jira: 'JIRA', Asana: 'ASN', Notion: 'NOT' };
   const prefix = prefixes[tracker] || 'TSK';
-  return tasks.map((task) => {
-    const externalId = `${prefix}-${Math.floor(100 + Math.random() * 900)}`;
+  const base = KEY_BASE[tracker] ?? 0;
+  return tasks.map((task, i) => {
+    const externalId = `${prefix}-${base + alreadyPushed + i + 1}`;
     return {
       ...task,
       status: 'Synced',
@@ -81,11 +86,11 @@ async function createLinearIssue(apiKey, teamId, task, meetingTitle) {
   return issue;
 }
 
-async function pushTasks({ tasks, tracker = 'Linear', meetingTitle = 'Meeting Sync' }) {
+async function pushTasks({ tasks, tracker = 'Linear', meetingTitle = 'Meeting Sync', alreadyPushed = 0 }) {
   const apiKey = process.env.LINEAR_API_KEY && process.env.LINEAR_API_KEY.trim();
   if (tracker !== 'Linear' || !apiKey) {
     return {
-      pushedTasks: simulateLinearPush(tasks, tracker),
+      pushedTasks: simulateLinearPush(tasks, tracker, alreadyPushed),
       live: false,
       reason: tracker !== 'Linear'
         ? `${tracker} uses simulated webhook delivery in this demo`
@@ -112,7 +117,7 @@ async function pushTasks({ tasks, tracker = 'Linear', meetingTitle = 'Meeting Sy
   } catch (err) {
     console.error('[linearService] Live Linear push failed, falling back to simulation:', err.message);
     return {
-      pushedTasks: simulateLinearPush(tasks, 'Linear'),
+      pushedTasks: simulateLinearPush(tasks, 'Linear', alreadyPushed),
       live: false,
       reason: `Linear API error: ${err.message}. Generated simulated issue keys instead.`
     };

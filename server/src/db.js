@@ -4,101 +4,194 @@ const path = require('path');
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DB_FILE = path.join(DATA_DIR, 'meetings-store.json');
 
-// Initial seed data representing past meetings to demonstrate cross-meeting memory & contradiction detection
-const INITIAL_SEED = {
-  meetings: [
-    {
-      id: "meet-001",
-      title: "Q4 Product Launch & Scope Alignment",
-      date: "2026-10-24T10:00:00.000Z",
-      source: "Wispr Flow Voice Ingestion",
-      efficiencyScore: 88,
-      decisions: [
-        {
-          id: "dec-001",
-          decision: "Lock target Q4 launch date strictly for November 15, 2026",
-          context: "Marketing campaigns and press embargoes are booked for mid-November.",
-          category: "Timeline",
-          impactedComponents: ["Mobile App", "Web Checkout", "Marketing"],
-          status: "Active"
-        },
-        {
-          id: "dec-002",
-          decision: "Must include Apple Pay and Google Pay integration in v1 checkout",
-          context: "User research showed 68% mobile shoppers abandon without one-click checkout.",
-          category: "Feature Scope",
-          impactedComponents: ["Web Checkout", "Payments Backend"],
-          status: "Active"
-        },
-        {
-          id: "dec-003",
-          decision: "Mandatory zero-downtime database migration strategy before launch",
-          context: "Lena confirmed customer SLA requires 99.99% availability during rollout.",
-          category: "Infrastructure",
-          impactedComponents: ["PostgreSQL Cluster", "Auth Service"],
-          status: "Active"
-        }
-      ],
-      actionItems: [
-        {
-          id: "task-001",
-          title: "Complete PCI-DSS compliance audit for payment gateway",
-          owner: "Marcus",
-          deadline: "2026-11-05",
-          priority: "High",
-          status: "Synced",
-          tracker: "Linear",
-          externalId: "LIN-102"
-        },
-        {
-          id: "task-002",
-          title: "Deliver final high-fidelity Figma components for checkout modal",
-          owner: "Lena",
-          deadline: "2026-11-08",
-          priority: "High",
-          status: "Synced",
-          tracker: "Jira",
-          externalId: "JIRA-409"
-        },
-        {
-          id: "task-003",
-          title: "Coordinate launch press release drafts with PR agency",
-          owner: "Priya",
-          deadline: "2026-11-10",
-          priority: "Medium",
-          status: "Synced",
-          tracker: "Asana",
-          externalId: "ASN-771"
-        }
-      ],
-      stats: {
-        actionToTalkRatio: "74%",
-        fillerWordCount: 14,
-        durationMinutes: 32
-      }
-    }
-  ],
-  conflicts: [
-    {
-      id: "conf-sample-1",
-      meetingId: "meet-001",
-      detectedAt: "2026-10-24T10:35:00.000Z",
-      topic: "Launch Date Timeline",
-      previousDecision: "Lock target Q4 launch date strictly for November 15, 2026 (from Sprint Kickoff)",
-      contradiction: "Tentative discussion about delaying to December 5th",
-      severity: "High",
-      status: "Resolved",
-      resolution: "Reaffirmed Nov 15th deadline after Priya confirmed sponsor contract clauses"
-    }
-  ],
-  syncedStats: {
-    totalPushed: 3,
-    linear: 1,
-    jira: 1,
-    asana: 1,
-    notion: 0
-  }
+// Seed data is built relative to "today" so the demo never shows stale / wrongly-overdue items.
+const isoDay = (offsetDays) => {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
+const isoAgo = (days, hour = 10) => {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  d.setHours(hour, 0, 0, 0);
+  return d.toISOString();
+};
+
+function buildSeed() {
+  return {
+    meetings: [
+      {
+        id: "meet-002",
+        title: "Design Critique & Accessibility Sync",
+        date: isoAgo(2, 15),
+        source: "Wispr Flow Voice Ingestion",
+        efficiencyScore: 74,
+        efficiency: {
+          score: 74,
+          grade: "Moderate Output",
+          actionToTalkRatio: "58%",
+          actionToTalkPct: 58,
+          fillerWordCount: 9,
+          talkTimeEstimatedMin: 21,
+          breakdown: [
+            { label: "Baseline", points: 50 },
+            { label: "1 decision", points: 6 },
+            { label: "3 action items", points: 15 },
+            { label: "Action-to-talk", points: 9 },
+            { label: "Every task has an owner", points: 8 },
+            { label: "Filler noise", points: -4 }
+          ],
+          critique: "Decent output (3 action items) but only 58% of the conversation turned into commitments. Cut digressions and confirm owners out loud to raise the score."
+        },
+        decisions: [
+          {
+            id: "dec-004",
+            decision: "Run a design critique every Thursday before sprint planning",
+            context: "Reviews were happening ad hoc and blocking engineering handoff.",
+            category: "Strategy",
+            impactedComponents: ["Design System", "Sprint Planning"],
+            status: "Active"
+          }
+        ],
+        actionItems: [
+          {
+            id: "task-004",
+            title: "Publish accessibility guidelines for the shared component library",
+            owner: "Sarah",
+            deadline: isoDay(3),
+            priority: "Medium",
+            status: "Pending",
+            tracker: "Linear"
+          },
+          {
+            id: "task-005",
+            title: "Prepare usability test script for the new onboarding flow",
+            owner: "Lena",
+            deadline: isoDay(1),
+            priority: "High",
+            status: "Pending",
+            tracker: "Linear"
+          },
+          {
+            id: "task-006",
+            title: "Set up error-monitoring dashboards for the payments service",
+            owner: "Marcus",
+            deadline: isoDay(-2),
+            priority: "High",
+            status: "Pending",
+            tracker: "Linear"
+          }
+        ],
+        stats: { actionToTalkRatio: "58%", fillerWordCount: 9, durationMinutes: 21 }
+      },
+      {
+        id: "meet-001",
+        title: "Q4 Product Launch & Scope Alignment",
+        date: isoAgo(7),
+        source: "Wispr Flow Voice Ingestion",
+        efficiencyScore: 88,
+        efficiency: {
+          score: 88,
+          grade: "High Execution Velocity",
+          actionToTalkRatio: "74%",
+          actionToTalkPct: 74,
+          fillerWordCount: 14,
+          talkTimeEstimatedMin: 32,
+          breakdown: [
+            { label: "Baseline", points: 50 },
+            { label: "3 decisions", points: 18 },
+            { label: "3 action items", points: 15 },
+            { label: "Action-to-talk", points: 11 },
+            { label: "Every task has an owner", points: 8 },
+            { label: "Filler noise", points: -4 }
+          ],
+          critique: "Strong execution: 3 action items with clear owners (Marcus, Lena, Priya) and 3 decisions, with 74% of meaningful turns turning into commitments. Wispr Flow filtered 14 filler words."
+        },
+        decisions: [
+          {
+            id: "dec-001",
+            decision: "Lock target Q4 launch date strictly for November 15, 2026",
+            context: "Marketing campaigns and press embargoes are booked for mid-November.",
+            category: "Timeline",
+            impactedComponents: ["Mobile App", "Web Checkout", "Marketing"],
+            status: "Active"
+          },
+          {
+            id: "dec-002",
+            decision: "Must include Apple Pay and Google Pay integration in v1 checkout",
+            context: "User research showed 68% mobile shoppers abandon without one-click checkout.",
+            category: "Feature Scope",
+            impactedComponents: ["Web Checkout", "Payments Backend"],
+            status: "Active"
+          },
+          {
+            id: "dec-003",
+            decision: "Mandatory zero-downtime database migration strategy before launch",
+            context: "Lena confirmed customer SLA requires 99.99% availability during rollout.",
+            category: "Infrastructure",
+            impactedComponents: ["PostgreSQL Cluster", "Auth Service"],
+            status: "Active"
+          }
+        ],
+        actionItems: [
+          {
+            id: "task-001",
+            title: "Complete PCI-DSS compliance audit for payment gateway",
+            owner: "Marcus",
+            deadline: isoDay(5),
+            priority: "High",
+            status: "Synced",
+            tracker: "Linear",
+            externalId: "LIN-102"
+          },
+          {
+            id: "task-002",
+            title: "Deliver final high-fidelity Figma components for checkout modal",
+            owner: "Lena",
+            deadline: isoDay(8),
+            priority: "High",
+            status: "Synced",
+            tracker: "Jira",
+            externalId: "JIRA-409"
+          },
+          {
+            id: "task-003",
+            title: "Coordinate launch press release drafts with PR agency",
+            owner: "Priya",
+            deadline: isoDay(10),
+            priority: "Medium",
+            status: "Synced",
+            tracker: "Asana",
+            externalId: "ASN-771"
+          }
+        ],
+        stats: { actionToTalkRatio: "74%", fillerWordCount: 14, durationMinutes: 32 }
+      }
+    ],
+    conflicts: [
+      {
+        id: "conf-sample-1",
+        meetingId: "meet-001",
+        meetingTitle: "Q4 Product Launch & Scope Alignment",
+        detectedAt: isoAgo(7, 11),
+        topic: "Launch Date Timeline",
+        previousDecision: "Lock target Q4 launch date strictly for November 15, 2026 (from Sprint Kickoff)",
+        contradiction: "Tentative discussion about delaying to December 5th",
+        severity: "High",
+        status: "Resolved",
+        resolutionStrategy: "keep_original",
+        resolution: "Reaffirmed Nov 15th deadline after Priya confirmed sponsor contract clauses"
+      }
+    ],
+    syncedStats: {
+      totalPushed: 3,
+      linear: 1,
+      jira: 1,
+      asana: 1,
+      notion: 0
+    }
+  };
+}
 
 class MeetingStore {
   constructor() {
@@ -121,8 +214,9 @@ class MeetingStore {
     } catch (err) {
       console.warn('[MeetingStore] Error reading store, re-initializing seed:', err.message);
     }
-    this.saveData(INITIAL_SEED);
-    return JSON.parse(JSON.stringify(INITIAL_SEED));
+    const seed = buildSeed();
+    this.saveData(seed);
+    return seed;
   }
 
   saveData(data) {
@@ -157,8 +251,18 @@ class MeetingStore {
     return all;
   }
 
-  getActiveDecisions() {
-    return this.getAllDecisions().filter(d => !d.status || d.status === 'Active');
+  // Only decisions that are truly "locked" count as memory. Pending / Rejected / Flagged / Superseded do not.
+  // excludeMeetingId lets us re-run a meeting without it contradicting its own earlier version.
+  getActiveDecisions({ excludeMeetingId } = {}) {
+    return this.getAllDecisions().filter(d =>
+      (!d.status || d.status === 'Active') &&
+      (!excludeMeetingId || d.meetingId !== excludeMeetingId)
+    );
+  }
+
+  findMeetingIdByTitle(title) {
+    const existing = (this.data.meetings || []).find(m => m.title === title && m.id !== 'meet-001');
+    return existing ? existing.id : undefined;
   }
 
   saveMeeting(meeting) {
@@ -177,12 +281,21 @@ class MeetingStore {
 
   deleteMeeting(id) {
     this.data.meetings = (this.data.meetings || []).filter(m => m.id !== id);
+    this.data.conflicts = (this.data.conflicts || []).filter(c => c.meetingId !== id);
     this.saveData();
     return true;
   }
 
+  updateMeetingTasks(meetingId, tasks) {
+    const meeting = this.getMeeting(meetingId);
+    if (!meeting) return null;
+    meeting.actionItems = Array.isArray(tasks) ? tasks : meeting.actionItems;
+    this.saveData();
+    return meeting;
+  }
+
   resetToSeed() {
-    this.data = JSON.parse(JSON.stringify(INITIAL_SEED));
+    this.data = buildSeed();
     this.saveData();
     return this.data;
   }
@@ -195,12 +308,14 @@ class MeetingStore {
     if (!conflict.id) {
       conflict.id = `conf-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
     }
+    const byId = (this.data.conflicts || []).find(c => c.id === conflict.id);
+    if (byId) return byId;
     conflict.detectedAt = conflict.detectedAt || new Date().toISOString();
     conflict.status = conflict.status || 'Active';
     const existing = (this.data.conflicts || []).find(c =>
       c.status === 'Active' &&
-      c.previousDecisionId &&
-      c.previousDecisionId === conflict.previousDecisionId &&
+      c.meetingId && c.meetingId === conflict.meetingId &&
+      c.previousDecisionId && c.previousDecisionId === conflict.previousDecisionId &&
       (c.topic || '') === (conflict.topic || '')
     );
     if (existing) return existing;
@@ -209,26 +324,57 @@ class MeetingStore {
     return conflict;
   }
 
+  // Re-running a meeting replaces its still-open conflicts instead of piling up duplicates.
+  replaceMeetingConflicts(meetingId, meetingTitle, conflicts = []) {
+    this.data.conflicts = (this.data.conflicts || []).filter(
+      c => !(c.meetingId === meetingId && c.status === 'Active')
+    );
+    return (conflicts || []).map(c => this.addConflict({ ...c, meetingId, meetingTitle }));
+  }
+
   resolveConflict(conflictId, resolutionStrategy, notes = '') {
     const conflict = (this.data.conflicts || []).find(c => c.id === conflictId);
     if (!conflict) return null;
-    conflict.status = 'Resolved';
-    conflict.resolutionStrategy = resolutionStrategy; // 'overwrite', 'keep_original', 'manual_flag'
-    conflict.resolutionNotes = notes;
-    conflict.resolvedAt = new Date().toISOString();
+    const now = new Date().toISOString();
+    const newIds = new Set(conflict.newDecisionIds || []);
 
-    // If strategy is 'overwrite', update the historical decision
-    if (resolutionStrategy === 'overwrite' && conflict.previousDecisionId) {
-      for (const m of this.data.meetings) {
-        const d = (m.decisions || []).find(dec => dec.id === conflict.previousDecisionId);
-        if (d) {
-          d.status = 'Superseded';
-          d.supersededBy = conflict.contradiction;
-          d.supersededAt = new Date().toISOString();
+    const setNewDecisionStatus = (status) => {
+      for (const m of this.data.meetings || []) {
+        for (const d of m.decisions || []) {
+          if (newIds.has(d.id)) {
+            d.status = status;
+            d.statusUpdatedAt = now;
+          }
         }
       }
+    };
+
+    if (resolutionStrategy === 'overwrite') {
+      // Accept the new direction: old locked decision is superseded, new decision(s) become the locked truth.
+      for (const m of this.data.meetings || []) {
+        for (const d of m.decisions || []) {
+          if (d.id === conflict.previousDecisionId) {
+            d.status = 'Superseded';
+            d.supersededBy = conflict.contradiction;
+            d.supersededAt = now;
+          }
+        }
+      }
+      setNewDecisionStatus('Active');
+      conflict.status = 'Resolved';
+    } else if (resolutionStrategy === 'keep_original') {
+      // Reject the new proposal: original stays locked, new decision(s) are marked Rejected.
+      setNewDecisionStatus('Rejected');
+      conflict.status = 'Resolved';
+    } else {
+      // manual_flag: neither side wins yet; new decision(s) stay out of memory until a human decides.
+      setNewDecisionStatus('Flagged');
+      conflict.status = 'Flagged';
     }
 
+    conflict.resolutionStrategy = resolutionStrategy; // 'overwrite', 'keep_original', 'manual_flag'
+    conflict.resolutionNotes = notes;
+    conflict.resolvedAt = now;
     this.saveData();
     return conflict;
   }
@@ -267,25 +413,19 @@ class MeetingStore {
     return tasks;
   }
 
-  markTasksSynced(pushedTasks, meetingTitle) {
+  markTasksSynced(pushedTasks) {
     const byId = new Map((pushedTasks || []).map(t => [t.id, t]));
     for (const m of this.data.meetings || []) {
-      if (meetingTitle && m.title !== meetingTitle) continue;
       m.actionItems = (m.actionItems || []).map(task => {
         const match = byId.get(task.id);
         if (!match) return task;
-        return {
-          ...task,
-          status: 'Synced',
-          tracker: match.tracker || task.tracker,
-          externalId: match.externalId,
-          externalUrl: match.externalUrl,
-          syncedAt: match.syncedAt
-        };
+        // Keep any inline edits the person made in Review & Push (title/owner/deadline/priority)
+        return { ...task, ...match, status: 'Synced' };
       });
     }
     this.saveData();
   }
+
   getLatestWisprSession() {
     return this.data.latestWisprNotetakerSession || {
       id: "wispr-note-latest",

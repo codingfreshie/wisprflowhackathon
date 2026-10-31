@@ -7,6 +7,8 @@ import ReviewPushModal from './components/ReviewPushModal';
 import RemindersTab from './components/RemindersTab';
 import WeeklyDigestTab from './components/WeeklyDigestTab';
 import EfficiencyScoreCard from './components/EfficiencyScoreCard';
+import EfficiencyReportTab from './components/EfficiencyReportTab';
+import ConflictAuditTrail from './components/ConflictAuditTrail';
 import MemoryVaultTab from './components/MemoryVaultTab';
 import { SAMPLE_TRANSCRIPTS } from './data/sampleTranscripts';
 import {
@@ -15,6 +17,7 @@ import {
   saveMeetingToMemory,
   resolveConflict,
   pushTasksToTracker,
+  saveMeetingTasks,
   getConflicts
 } from './services/api';
 import {
@@ -45,6 +48,7 @@ export default function App() {
   const [actionItems, setActionItems] = useState([]);
   const [conflicts, setConflicts] = useState([]);
   const [efficiency, setEfficiency] = useState(null);
+  const [meetingId, setMeetingId] = useState(null);
 
   // Status & Notifications
   const [toast, setToast] = useState(null);
@@ -66,21 +70,25 @@ export default function App() {
     if (health?.persistentMemory?.syncedStats) {
       setSyncedStats(health.persistentMemory.syncedStats);
     }
+    if (health?.status !== 'ok') return;
     try {
+      // The vault is the single source of truth for conflict status (Active / Resolved / Flagged)
       const vaultConflicts = await getConflicts();
-      if (Array.isArray(vaultConflicts) && vaultConflicts.length > 0) {
-        setConflicts(prev => {
-          const byId = new Map(prev.map(c => [c.id, c]));
-          vaultConflicts.forEach(c => {
-            const existing = byId.get(c.id);
-            byId.set(c.id, existing ? { ...c, ...existing, status: existing.status || c.status } : c);
-          });
-          return Array.from(byId.values());
-        });
-      }
+      if (Array.isArray(vaultConflicts)) setConflicts(vaultConflicts);
     } catch (e) {
       // vault conflicts are optional when backend is offline
     }
+  };
+
+  // Called by the Memory Vault after Reset / Delete so the UI never shows ghosts of deleted meetings
+  const handleVaultChanged = async ({ reset = false } = {}) => {
+    if (reset) {
+      setDecisions([]);
+      setActionItems([]);
+      setEfficiency(null);
+      setMeetingId(null);
+    }
+    await refreshHealth();
   };
 
   // Extract decisions, action items, conflicts & efficiency score
@@ -91,19 +99,20 @@ export default function App() {
       const data = await extractMeetingIntelligence(transcript, meetingTitle);
       setDecisions(data.decisions || []);
       setActionItems(data.actionItems || []);
-      setConflicts(data.conflicts || []);
       setEfficiency(data.efficiency || null);
+      setMeetingId(data.meetingId || null);
 
-      const conflictsCount = (data.conflicts || []).filter(c => c.status !== 'Resolved').length;
+      // Pull authoritative conflict state (new + any older unresolved ones) from the vault
+      await refreshHealth();
+
+      const conflictsCount = (data.conflicts || []).filter(c => !c.status || c.status === 'Active').length;
       if (conflictsCount > 0) {
         showToast(`🚨 ${conflictsCount} Cross-Meeting Contradiction(s) Detected!`, 'error');
-        setActiveTab('conflicts');
+        // The red banner lives at the top of the page - bring it into view
+        window.scrollTo({ top: 0, behavior: 'smooth' });
       } else {
         showToast(`Extracted ${data.decisions?.length || 0} decisions & ${data.actionItems?.length || 0} action items — saved to memory.`, 'success');
       }
-
-      // If there are conflicts, stay on tab or highlight; scroll smoothly
-      refreshHealth();
     } catch (err) {
       showToast('Extraction failed: ' + err.message, 'error');
     } finally {
@@ -111,13 +120,24 @@ export default function App() {
     }
   };
 
-  // Resolve a conflict
+  // Resolve a conflict (Overwrite / Retain Original / Flag for Review)
   const handleResolveConflict = async (conflictId, strategy) => {
     try {
-      await resolveConflict(conflictId, strategy);
-      // Mark conflict as resolved locally
-      setConflicts(prev => prev.map(c => c.id === conflictId ? { ...c, status: 'Resolved' } : c));
-      showToast(`Conflict marked as resolved (${strategy})`, 'success');
+      const res = await resolveConflict(conflictId, strategy);
+      const newStatus = res?.conflict?.status || 'Resolved';
+      setConflicts(prev => prev.map(c => c.id === conflictId ? { ...c, status: newStatus, resolutionStrategy: strategy } : c));
+
+      // Reflect the new decision statuses (Active / Rejected / Flagged) in the results on screen
+      if (res?.meeting && res.meeting.id === meetingId && Array.isArray(res.meeting.decisions)) {
+        setDecisions(res.meeting.decisions);
+      }
+
+      const messages = {
+        overwrite: 'Memory updated — the new decision is now locked and the old one is superseded.',
+        keep_original: 'Original decision retained — the new proposal was rejected.',
+        manual_flag: 'Flagged for team review — the new decision is held out of memory.'
+      };
+      showToast(messages[strategy] || 'Conflict resolved', 'success');
       refreshHealth();
     } catch (err) {
       showToast('Resolution error: ' + err.message, 'error');
@@ -129,23 +149,26 @@ export default function App() {
     setIsPushing(true);
     try {
       const res = await pushTasksToTracker(tasksToPush, tracker, title);
-      // Update local action items status to Synced
-      const pushedIds = new Set(tasksToPush.map(t => t.id));
-      setActionItems(prev =>
-        prev.map(t => {
-          if (pushedIds.has(t.id)) {
-            const match = res.pushedTasks?.find(p => p.id === t.id);
-            return {
-              ...t,
-              status: 'Synced',
-              tracker,
-              externalId: match?.externalId || `${tracker.substring(0, 3).toUpperCase()}-101`,
-              externalUrl: match?.externalUrl
-            };
-          }
-          return t;
-        })
-      );
+
+      // Merge the tracker keys (LIN-123 / JIRA-123 ...) into the on-screen list
+      const pushedById = new Map((res.pushedTasks || []).map(p => [p.id, p]));
+      const updatedItems = actionItems.map(t => {
+        const match = pushedById.get(t.id);
+        if (!match) return t;
+        return {
+          ...t,
+          status: 'Synced',
+          tracker,
+          externalId: match.externalId || `${tracker.substring(0, 3).toUpperCase()}-101`,
+          externalUrl: match.externalUrl
+        };
+      });
+      setActionItems(updatedItems);
+
+      // Persist every inline edit (also for tasks not pushed) so Digest & Reminders stay accurate
+      if (meetingId) {
+        try { await saveMeetingTasks(meetingId, updatedItems); } catch (e) { console.warn('Could not persist task edits', e); }
+      }
 
       if (res.syncedStats) {
         setSyncedStats(res.syncedStats);
@@ -153,7 +176,7 @@ export default function App() {
 
       showToast(res.live
         ? `🚀 Created ${tasksToPush.length} live ${tracker} issues`
-        : `Synced ${tasksToPush.length} items to ${tracker}`, 'success');
+        : `Synced ${tasksToPush.length} item(s) to ${tracker}`, 'success');
       refreshHealth();
       return res;
     } catch (err) {
@@ -173,13 +196,14 @@ export default function App() {
     setIsSavingMeeting(true);
     try {
       await saveMeetingToMemory({
+        id: meetingId || undefined,
         title: meetingTitle,
         date: new Date().toISOString(),
         source: 'Wispr Flow Voice Ingestion',
         efficiencyScore: efficiency?.score || 85,
         decisions,
         actionItems,
-        conflicts
+        conflicts: conflicts.filter(c => !c.meetingId || c.meetingId === meetingId)
       });
       showToast(`Saved "${meetingTitle}" to Persistent Memory Vault!`, 'success');
       refreshHealth();
@@ -190,13 +214,17 @@ export default function App() {
     }
   };
 
-  const activeConflictCount = (conflicts || []).filter(c => c.status !== 'Resolved').length;
+  const isActiveConflict = (c) => !c.status || c.status === 'Active';
+  const activeConflictCount = (conflicts || []).filter(isActiveConflict).length;
+  const flaggedConflictCount = (conflicts || []).filter(c => c.status === 'Flagged').length;
+  const thisMeetingConflicts = (conflicts || []).filter(c => meetingId && c.meetingId === meetingId);
+  const conflictSignature = (conflicts || []).map(c => `${c.id}:${c.status}`).join('|');
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
       {/* Toast Notification */}
       {toast && (
-        <div className={`fixed top-4 right-4 z-[9999] px-4 py-3 rounded-xl border shadow-2xl text-xs font-semibold flex items-center space-x-2 animate-bounce-subtle ${
+        <div className={`fixed top-20 right-4 z-[9999] max-w-sm px-4 py-3 rounded-xl border shadow-2xl text-xs font-semibold flex items-center space-x-2 animate-bounce-subtle ${
           toast.type === 'error'
             ? 'bg-red-950/90 border-red-500 text-red-200'
             : toast.type === 'warning'
@@ -267,6 +295,11 @@ export default function App() {
                 {activeConflictCount}
               </span>
             )}
+            {activeConflictCount === 0 && flaggedConflictCount > 0 && (
+              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold">
+                {flaggedConflictCount} flagged
+              </span>
+            )}
           </button>
 
           <button
@@ -327,10 +360,12 @@ export default function App() {
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6">
         {/* Prominent Eye-Catching Red Conflict Banner (Always visible at top when contradictions are active!) */}
-        <ConflictBanner
-          conflicts={conflicts}
-          onResolveConflict={handleResolveConflict}
-        />
+        {activeTab !== 'conflicts' && (
+          <ConflictBanner
+            conflicts={conflicts}
+            onResolveConflict={handleResolveConflict}
+          />
+        )}
 
         {/* Tab 1: Voice Ingestion */}
         {activeTab === 'ingestion' && (
@@ -381,7 +416,7 @@ export default function App() {
                   efficiency={efficiency}
                   decisions={decisions}
                   actionItems={actionItems}
-                  conflicts={conflicts}
+                  conflicts={thisMeetingConflicts}
                   meetingTitle={meetingTitle}
                 />
               </div>
@@ -433,7 +468,9 @@ export default function App() {
 
             {activeConflictCount === 0 ? (
               <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-6 text-xs text-slate-400">
-                No active contradictions against locked memory. Load Scenario 1 (Emergency Pivot) and extract to trigger the launch-date and Apple Pay warnings.
+                {flaggedConflictCount > 0
+                  ? 'No new contradictions waiting. Flagged items are queued below for a final decision.'
+                  : 'No open contradictions against locked memory. Load Scenario 1 (Emergency Pivot) and extract to trigger the launch-date and Apple Pay warnings.'}
               </div>
             ) : (
               <ConflictBanner
@@ -441,6 +478,8 @@ export default function App() {
                 onResolveConflict={handleResolveConflict}
               />
             )}
+
+            <ConflictAuditTrail conflicts={conflicts} onResolveConflict={handleResolveConflict} />
           </div>
         )}
 
@@ -454,26 +493,14 @@ export default function App() {
           <WeeklyDigestTab />
         )}
 
-        {/* Tab 6: Efficiency Score & Export */}
+        {/* Tab 6: Efficiency Score & Export (cross-meeting, read from the vault) */}
         {activeTab === 'efficiency' && (
-          <EfficiencyScoreCard
-            efficiency={efficiency || {
-              score: 86,
-              actionToTalkRatio: "78%",
-              fillerWordCount: 14,
-              talkTimeEstimatedMin: 28,
-              critique: "Excellent action-oriented meeting! 3 high-priority commitments assigned to Marcus, Lena, and Priya with concrete deadlines. Wispr Flow voice cleaned 14 conversational filler words effortlessly."
-            }}
-            decisions={decisions}
-            actionItems={actionItems}
-            conflicts={conflicts}
-            meetingTitle={meetingTitle}
-          />
+          <EfficiencyReportTab currentMeetingId={meetingId} refreshKey={`${meetingId || ''}|${conflictSignature}`} />
         )}
 
         {/* Tab 7: Memory Vault */}
         {activeTab === 'memory' && (
-          <MemoryVaultTab onMemoryChange={refreshHealth} />
+          <MemoryVaultTab onMemoryChange={handleVaultChanged} />
         )}
       </main>
 

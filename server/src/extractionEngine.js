@@ -1,5 +1,9 @@
 const FILLER_RE = /\b(uh|um|umm|uhh|er|ah|like|you know|sort of|kind of|i mean|basically|actually|right|so yeah|yeah)\b/gi;
 
+// Used ONLY for counting. Identical to the live counter in the transcript box so the numbers always match.
+const COUNT_FILLER_RE = /\b(uh|um|umm|uhh|like|you know|basically|so yeah|wait no|scratch that)\b/gi;
+const countFillers = (text) => (String(text || '').match(COUNT_FILLER_RE) || []).length;
+
 const KNOWN_OWNERS = ['Marcus', 'Lena', 'Priya', 'Sarah', 'David'];
 
 const CHATTER_RE = /\b(champions league|espresso|coffee machine|caffeine|just kidding|haha|lol|mic check|let'?s wrap up|who is getting coffee)\b/i;
@@ -31,7 +35,7 @@ function nextWeekday(referenceDate, weekday) {
   return toIso(d);
 }
 
-function parseDeadline(text, referenceDate = new Date('2026-10-31')) {
+function parseDeadline(text, referenceDate = new Date()) {
   const l = text.toLowerCase();
   const monthMap = {
     jan: 0, january: 0, feb: 1, february: 1, mar: 2, march: 2,
@@ -45,8 +49,15 @@ function parseDeadline(text, referenceDate = new Date('2026-10-31')) {
     const key = named[1].replace('.', '').toLowerCase();
     const month = monthMap[key] ?? monthMap[key.slice(0, 3)];
     const day = parseInt(named[2], 10);
-    const year = named[3] ? parseInt(named[3], 10) : 2026;
-    if (month !== undefined) return isoDate(year, month, day);
+    const year = named[3] ? parseInt(named[3], 10) : referenceDate.getFullYear();
+    if (month !== undefined) {
+      let y = year;
+      if (!named[3]) {
+        const startToday = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), referenceDate.getDate());
+        if (new Date(y, month, day) < addDays(startToday, -1)) y += 1; // already passed -> means next year
+      }
+      return isoDate(y, month, day);
+    }
   }
 
   if (/\btomorrow\b/.test(l)) return toIso(addDays(referenceDate, 1));
@@ -213,10 +224,15 @@ function heuristicExtract(transcript, title = 'Spoken Sync') {
   const seenTasks = new Set();
   let decCounter = 1;
   let taskCounter = 1;
+  // Counted per speaker TURN (a line of the transcript), not per sentence
+  const substantiveTurns = new Set();
+  const actionableTurns = new Set();
 
   for (const utt of utterances) {
     const corrected = applySelfCorrections(utt.text);
     if (!corrected || isChatter(corrected)) continue;
+    substantiveTurns.add(utt.raw);
+    const beforeCount = decisions.length + actionItems.length;
 
     if (isDecisionLine(corrected)) {
       const decisionText = toDecisionText(corrected);
@@ -253,6 +269,7 @@ function heuristicExtract(transcript, title = 'Spoken Sync') {
         });
       }
     }
+    if (decisions.length + actionItems.length > beforeCount) actionableTurns.add(utt.raw);
   }
 
   if (decisions.length === 0 && String(transcript).length > 20) {
@@ -279,7 +296,7 @@ function heuristicExtract(transcript, title = 'Spoken Sync') {
   }
 
   const wordCount = String(transcript).split(/\s+/).filter(Boolean).length;
-  const detectedFillers = (String(transcript).match(FILLER_RE) || []).length;
+  const detectedFillers = countFillers(transcript);
 
   return {
     decisions,
@@ -287,31 +304,62 @@ function heuristicExtract(transcript, title = 'Spoken Sync') {
     speakers: Array.from(speakersFound),
     wordCount,
     detectedFillers,
-    lineCount: utterances.length
+    lineCount: utterances.length,
+    substantiveCount: substantiveTurns.size,
+    actionableCount: actionableTurns.size
   };
 }
 
-function scoreEfficiency({ decisions, actionItems, conflicts, detectedFillers, wordCount, lineCount, speakers }) {
-  const conflictDeduction = (conflicts || []).length * 12;
-  const fillerRatio = detectedFillers / Math.max(wordCount, 1);
-  const fillerPenalty = Math.min(Math.round(fillerRatio * 150), 15);
-  const rawScore = 65 + (decisions.length * 8) + (actionItems.length * 6) - conflictDeduction - fillerPenalty;
-  const efficiencyScore = Math.max(35, Math.min(96, rawScore));
+function scoreEfficiency({
+  decisions = [], actionItems = [], conflicts = [], detectedFillers = 0,
+  wordCount = 0, lineCount = 0, speakers = [], substantiveCount, actionableCount
+}) {
+  // Action-to-talk: what share of the meaningful spoken turns produced a decision or an owned action item.
+  const substantive = Math.max(1, substantiveCount ?? lineCount ?? 1);
+  const actionable = actionableCount ?? Math.min(substantive, decisions.length + actionItems.length);
+  const ratioPct = Math.max(0, Math.min(100, Math.round((actionable / substantive) * 100)));
 
-  let critique = '';
-  if ((conflicts || []).length > 0) {
-    critique = `High output generated (${actionItems.length} action items, ${decisions.length} decisions), but ${conflicts.length} cross-meeting contradiction(s) were flagged against historical memory. Recommendation: Reconcile date and scope shifts before pushing to Linear.`;
-  } else if (actionItems.length >= 3) {
-    critique = `Excellent action-oriented execution! Clear ownership and explicit delivery deadlines were established for ${speakers.join(', ') || 'team members'}. Wispr Flow voice cleaned ${detectedFillers} filler words seamlessly.`;
+  const owned = actionItems.filter(t => t.owner && t.owner !== 'Unassigned').length;
+  const allOwned = actionItems.length > 0 && owned === actionItems.length;
+  const openConflicts = (conflicts || []).filter(c => !c.status || c.status === 'Active' || c.status === 'Flagged').length;
+
+  const fillerRatio = detectedFillers / Math.max(wordCount, 1);
+
+  // Every point in the score is explainable - the UI shows this breakdown.
+  const breakdown = [
+    { label: 'Baseline', points: 50 },
+    { label: `${decisions.length} decision${decisions.length === 1 ? '' : 's'}`, points: Math.min(decisions.length * 6, 18) },
+    { label: `${actionItems.length} action item${actionItems.length === 1 ? '' : 's'}`, points: Math.min(actionItems.length * 5, 25) },
+    { label: 'Action-to-talk', points: Math.round((ratioPct / 100) * 15) },
+    { label: 'Every task has an owner', points: allOwned ? 8 : 0 },
+    { label: 'Filler noise', points: -Math.min(Math.round(fillerRatio * 100), 8) },
+    { label: `${openConflicts} contradiction${openConflicts === 1 ? '' : 's'}`, points: -Math.min(openConflicts * 12, 36) }
+  ].filter(b => b.points !== 0 || b.label === 'Baseline');
+
+  const rawScore = breakdown.reduce((sum, b) => sum + b.points, 0);
+  const score = Math.max(30, Math.min(98, rawScore));
+  const grade = score >= 80 ? 'High Execution Velocity' : score >= 60 ? 'Moderate Output' : 'Action Friction';
+
+  const people = (speakers && speakers.length ? speakers : [...new Set(actionItems.map(t => t.owner).filter(Boolean))]).join(', ') || 'the team';
+  let critique;
+  if (openConflicts > 0) {
+    critique = `The meeting produced ${actionItems.length} action item${actionItems.length === 1 ? '' : 's'} and ${decisions.length} decision${decisions.length === 1 ? '' : 's'}, but ${openConflicts} contradict locked decisions from earlier meetings. Reconcile the date and scope changes before pushing anything to the tracker.`;
+  } else if (score >= 80) {
+    critique = `Strong execution: ${actionItems.length} action item${actionItems.length === 1 ? '' : 's'} with clear owners (${people}) and ${decisions.length} decision${decisions.length === 1 ? '' : 's'}, with ${ratioPct}% of meaningful turns turning into commitments. Wispr Flow filtered ${detectedFillers} filler words.`;
+  } else if (actionItems.length < 3) {
+    critique = `Only ${actionItems.length} action item${actionItems.length === 1 ? '' : 's'} came out of this meeting (${ratioPct}% action-to-talk). Add explicit owners and hard deadlines before closing the call to lift velocity.`;
   } else {
-    critique = 'Moderate execution density. Meeting yielded basic alignment, but more granular task ownership and hard deadlines would improve velocity.';
+    critique = `Decent output (${actionItems.length} action items) but only ${ratioPct}% of the conversation turned into commitments. Cut digressions and confirm owners out loud to raise the score.`;
   }
 
   return {
-    score: efficiencyScore,
-    actionToTalkRatio: `${Math.min(92, Math.max(45, Math.round((actionItems.length * 22) / Math.max(1, lineCount) * 100)))}%`,
+    score,
+    grade,
+    actionToTalkRatio: `${ratioPct}%`,
+    actionToTalkPct: ratioPct,
     fillerWordCount: detectedFillers,
-    talkTimeEstimatedMin: Math.max(12, Math.round(wordCount / 130)),
+    talkTimeEstimatedMin: Math.max(1, Math.round(wordCount / 130)),
+    breakdown,
     critique
   };
 }
@@ -321,5 +369,6 @@ module.exports = {
   scoreEfficiency,
   parseDeadline,
   stripFillers,
+  countFillers,
   FILLER_RE
 };

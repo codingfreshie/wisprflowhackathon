@@ -19,6 +19,15 @@ function extractDateHints(text) {
   return hints;
 }
 
+const normDate = (d) => String(d).toLowerCase().replace(/(st|nd|rd|th)\b/g, '').replace(/\./g, '').replace(/\s+/g, ' ').trim()
+  .replace(/^([a-z]{3})[a-z]*/, '$1');
+
+// First date mentioned that is NOT the date already locked in memory
+function pickNewDate(pastText, currentText) {
+  const locked = new Set(extractDateHints(pastText).map(normDate));
+  return extractDateHints(currentText).find(d => !locked.has(normDate(d)));
+}
+
 function datesConflict(pastText, currentText) {
   const pastDates = extractDateHints(pastText);
   const newDates = extractDateHints(currentText);
@@ -51,6 +60,28 @@ function buildConflict({ past, topic, contradiction, severity, reason, transcrip
   };
 }
 
+const DELAY_RE = /\b(delay|postpone|push back|slip|move|moving|shift|pushed)\b/i;
+
+/**
+ * Finds which NEW decisions (from the current transcript) caused a conflict, so that
+ * resolving the conflict can activate / reject / flag exactly those decisions.
+ */
+function linkNewDecisions(conflict, past, newDecisions = []) {
+  const ids = [];
+  const featureMatch = String(conflict.topic || '').match(/^Scope Reduction:\s*(.+)$/i);
+  for (const d of newDecisions || []) {
+    const text = String(d.decision || '').toLowerCase();
+    if (featureMatch) {
+      if (text.includes(featureMatch[1].toLowerCase())) ids.push(d.id);
+    } else if (/launch date|timeline/i.test(conflict.topic || '')) {
+      if (d.category === 'Timeline' || DELAY_RE.test(text)) ids.push(d.id);
+    } else if (past && d.category && d.category === past.category) {
+      ids.push(d.id);
+    }
+  }
+  return ids;
+}
+
 function detectConflicts(transcript, newDecisions = [], pastDecisions = []) {
   const activePast = (pastDecisions || []).filter(isActiveDecision);
   const combinedNew = [
@@ -67,7 +98,8 @@ function detectConflicts(transcript, newDecisions = [], pastDecisions = []) {
     const isTimeline = past.category === 'Timeline' || /\b(launch date|release date|target q4|lock target)\b/.test(pastLower);
 
     if (isTimeline && delayLanguage) {
-      const newDateHint = extractDateHints(combinedNew)[0];
+      const rawHint = pickNewDate(past.decision, combinedNew);
+      const newDateHint = rawHint ? rawHint.replace(/^[a-z]/, c => c.toUpperCase()) : rawHint;
       conflicts.push(buildConflict({
         past,
         topic: 'Launch Date Contradiction',
@@ -111,12 +143,15 @@ function detectConflicts(transcript, newDecisions = [], pastDecisions = []) {
   }
 
   const seen = new Set();
-  return conflicts.filter(c => {
-    const key = `${c.previousDecisionId}|${c.topic}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  const pastById = new Map(activePast.map(p => [p.id, p]));
+  return conflicts
+    .filter(c => {
+      const key = `${c.previousDecisionId}|${c.topic}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map(c => ({ ...c, newDecisionIds: linkNewDecisions(c, pastById.get(c.previousDecisionId), newDecisions) }));
 }
 
 function mergeConflicts(primary = [], secondary = []) {
@@ -135,5 +170,6 @@ function mergeConflicts(primary = [], secondary = []) {
 module.exports = {
   detectConflicts,
   mergeConflicts,
-  extractFeaturePhrases
+  extractFeaturePhrases,
+  linkNewDecisions
 };

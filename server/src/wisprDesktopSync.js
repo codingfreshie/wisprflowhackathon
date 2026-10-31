@@ -153,8 +153,35 @@ function getDesktopMeetingsList() {
   }));
 }
 
+/**
+ * Recent Wispr dictations (History table) so the UI "Desktop History" drawer works.
+ */
+function getDesktopHistory(limit = 10) {
+  const dbPath = getWisprDbPath();
+  if (!dbPath) return [];
+  const n = Math.max(1, Math.min(parseInt(limit, 10) || 10, 50));
+
+  const rows = runSqliteQuery(
+    dbPath,
+    `SELECT transcriptEntityId as id, formattedText as text, asrText as rawVoice, timestamp, numWords, duration, app FROM History WHERE status!='no_audio' ORDER BY timestamp DESC LIMIT ${n};`
+  );
+
+  return (rows || [])
+    .map(h => ({
+      id: h.id,
+      title: `Wispr Dictation (${h.app || 'App'})`,
+      transcript: h.text || h.rawVoice || '',
+      timestamp: h.timestamp,
+      numWords: h.numWords || String(h.text || h.rawVoice || '').split(/\s+/).filter(Boolean).length,
+      duration: h.duration,
+      app: h.app || 'Unknown app'
+    }))
+    .filter(h => h.transcript && h.transcript.trim().length > 0);
+}
+
 module.exports = {
   getWisprDbPath,
   getLatestDesktopSync,
-  getDesktopMeetingsList
+  getDesktopMeetingsList,
+  getDesktopHistory
 };
